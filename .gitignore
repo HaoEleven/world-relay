@@ -1,0 +1,43 @@
+# Python caches and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyInstaller and release artifacts
+build/
+dist/
+*.egg-info/
+WorldRelay-v*.zip
+*.sha256
+
+# Local configuration and runtime data
+.env
+.env.*
+!.env.example
+world_relay_config.json
+logs/
+webview/
+*.log
+*.tmp
+level.dat.owner-change.bak
+
+# Prevent accidental Minecraft data commits
+/.minecraft/
+/saves/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+Desktop.ini

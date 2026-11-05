@@ -1,0 +1,2 @@
+# Runtime dependency for the Windows desktop shell.
+pywebview==6.2.1

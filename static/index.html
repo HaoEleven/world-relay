@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#17241f">
+    <title>存档中继站</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </span>
+          <span>
+            <strong>存档中继站</strong>
+            <small>World Relay · <span id="app-display-version">正在载入</span></small>
+          </span>
+        </div>
+
+        <nav class="primary-nav">
+          <a class="nav-item is-active" href="?view=home" data-view-target="home" aria-current="page">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 10.8 12 3l9 7.8v9.7a.5.5 0 0 1-.5.5H15v-6H9v6H3.5a.5.5 0 0 1-.5-.5z"/></svg>
+            <span>主页</span>
+          </a>
+          <a class="nav-item" href="?view=manage&amp;list=versions" data-view-target="manage">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z"/></svg>
+            <span>存档管理</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-status">
+          <span class="status-dot" id="sidebar-status-dot" aria-hidden="true"></span>
+          <div>
+            <strong id="sidebar-status-title">等待配置</strong>
+            <small id="sidebar-status-copy">设置两个工作目录后即可开始</small>
+          </div>
+        </div>
+      </aside>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <section id="view-home" class="view is-active" aria-labelledby="home-title">
+          <header class="page-header home-header">
+            <div>
+              <h1 id="home-title" tabindex="-1">把世界交给正确的玩家</h1>
+              <p class="page-intro">选择版本、联机存档和新服主。中继站会修改 UID，并把完整存档安全切换到目标版本。</p>
+            </div>
+            <div class="terrain-strata" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </header>
+
+          <div id="configuration-notice" class="notice notice-warning" role="status" hidden>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4zm0 6v5m0 3v1"/></svg>
+            <div>
+              <strong>先完成路径设置</strong>
+              <p>前往“存档管理”，选择 .minecraft 与 saves 文件夹。</p>
+            </div>
+            <button type="button" class="text-button" data-view-target="manage">打开设置</button>
+          </div>
+
+          <form id="relay-form" class="relay-workflow" novalidate>
+            <div class="workflow-row">
+              <span class="step-index" aria-hidden="true">1</span>
+              <div class="field-copy">
+                <label for="home-version">版本名称</label>
+                <p id="home-version-help">决定目标存档位置与玩家名称缓存。</p>
+              </div>
+              <select id="home-version" name="version" aria-describedby="home-version-help" autocomplete="off" required disabled>
+                <option value="">请选择版本</option>
+              </select>
+            </div>
+
+            <div class="workflow-row">
+              <span class="step-index" aria-hidden="true">2</span>
+              <div class="field-copy">
+                <label for="home-save">存档名称</label>
+                <p id="home-save-help">来自已设置的 saves 管理目录。</p>
+              </div>
+              <select id="home-save" name="save" aria-describedby="home-save-help" autocomplete="off" required disabled>
+                <option value="">请先选择版本</option>
+              </select>
+            </div>
+
+            <div class="workflow-row">
+              <span class="step-index" aria-hidden="true">3</span>
+              <div class="field-copy">
+                <label for="home-player">新服主</label>
+                <p id="home-player-help">只显示 DAT 文件与 usercache 均可识别的玩家。</p>
+              </div>
+              <select id="home-player" name="player" aria-describedby="home-player-help home-player-note" autocomplete="off" required disabled>
+                <option value="">请先选择存档</option>
+              </select>
+            </div>
+
+            <div class="workflow-footer">
+              <div class="target-preview">
+                <span>写入位置</span>
+              <code id="target-preview" translate="no">选择三个字段后显示</code>
+              </div>
+              <button id="start-replace" class="primary-button" type="submit" disabled>
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 7h11l-2.5-2.5M19 17H8l2.5 2.5M16 7l-3 3m-5 7 3-3"/></svg>
+                开始替换
+              </button>
+            </div>
+          </form>
+          <p id="home-player-note" class="field-message" role="status"></p>
+        </section>
+
+        <section id="view-manage" class="view" aria-labelledby="manage-title" hidden>
+          <header class="page-header manage-header">
+            <div>
+              <h1 id="manage-title" tabindex="-1">存档管理</h1>
+              <p class="page-intro">配置两个独立目录，查看版本，为存档绑定 usercache，并管理联机存档。</p>
+            </div>
+            <button id="add-save" class="secondary-button" type="button" disabled>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              添加存档
+            </button>
+          </header>
+
+          <form id="settings-form" class="settings-panel" novalidate>
+            <div class="path-field">
+              <div class="path-heading">
+                <label for="minecraft-path">.minecraft 文件夹</label>
+              </div>
+              <div class="path-control">
+                <input id="minecraft-path" name="minecraftPath" type="text" autocomplete="off" spellcheck="false" translate="no" placeholder="例如：D:\Games\.minecraft…">
+                <button id="pick-minecraft" class="browse-button" type="button">选择文件夹</button>
+              </div>
+              <p>只读取 versions 与 usercache；除版本存档外不会写入其他内容。</p>
+            </div>
+
+            <div class="path-field">
+              <div class="path-heading">
+                <label for="saves-path">联机存档文件夹</label>
+              </div>
+              <div class="path-control">
+                <input id="saves-path" name="savesPath" type="text" autocomplete="off" spellcheck="false" translate="no" placeholder="例如：E:\SharedWorlds\saves…">
+                <button id="pick-saves" class="browse-button" type="button">选择文件夹</button>
+              </div>
+              <p>这里的存档允许添加、删除以及修改 level.dat。</p>
+            </div>
+
+            <div class="settings-actions">
+              <p id="settings-message" role="status"></p>
+              <button id="settings-submit" class="primary-button compact" type="submit">保存路径</button>
+            </div>
+          </form>
+
+          <div class="inventory-toolbar" aria-label="列表类型">
+            <button class="segment-button is-active" type="button" data-inventory-target="versions" aria-pressed="true">版本列表</button>
+            <button class="segment-button" type="button" data-inventory-target="saves" aria-pressed="false">存档列表</button>
+          </div>
+
+          <div class="inventory-layout">
+            <section class="inventory-list-panel" aria-labelledby="inventory-list-title">
+              <div class="panel-heading">
+                <div>
+                  <h2 id="inventory-list-title">版本列表</h2>
+                  <p id="inventory-count">0 个项目</p>
+                </div>
+                <button id="refresh-inventory" class="quiet-button" type="button">刷新</button>
+              </div>
+              <div id="inventory-list" class="inventory-list"></div>
+            </section>
+
+            <section id="detail-panel" class="detail-panel" aria-live="polite">
+              <div class="empty-state">
+                <svg aria-hidden="true" viewBox="0 0 48 48"><path d="M7 10h13l4 5h17v24H7zM7 18h34"/></svg>
+                <h2>选择一个项目</h2>
+                <p>版本会显示只读路径；存档可以绑定版本并查看玩家。</p>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="progress-dialog" class="modal progress-modal" aria-labelledby="progress-title">
+      <div class="modal-body" aria-busy="true">
+        <div class="modal-icon" id="progress-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="dialog-context">正在执行</p>
+          <h2 id="progress-title">处理存档</h2>
+        </div>
+        <p id="progress-message" class="progress-message" role="status" aria-live="polite">准备开始</p>
+        <progress id="progress-bar" class="progress-track" max="100" value="0">0%</progress>
+        <div class="progress-meta"><span id="progress-percent">0%</span><span id="progress-state">进行中</span></div>
+        <ol id="progress-log" class="progress-log" aria-label="执行记录"></ol>
+        <p id="progress-error" class="dialog-error" role="alert" hidden></p>
+        <p id="progress-warning" class="dialog-warning" role="status" hidden></p>
+      </div>
+      <div class="modal-actions">
+        <button id="progress-confirm" class="primary-button compact" type="button" disabled>确定</button>
+      </div>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="modal confirm-modal" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="modal-body">
+        <p class="dialog-context" id="confirm-context">确认操作</p>
+        <h2 id="confirm-title">继续吗？</h2>
+        <p id="confirm-message"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="quiet-button" type="button">取消</button>
+        <button id="confirm-accept" class="danger-button" type="button">继续</button>
+      </div>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

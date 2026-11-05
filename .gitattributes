@@ -1,0 +1,20 @@
+* text=auto
+
+*.py text eol=lf
+*.spec text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.svg text eol=lf
+*.bat text eol=crlf
+
+*.ico binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.zip binary

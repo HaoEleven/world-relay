@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Build and asset-generation tools.
+pyinstaller==6.22.3
+Pillow==11.2.1
