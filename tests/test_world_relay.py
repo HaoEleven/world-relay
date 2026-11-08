@@ -11,6 +11,7 @@ import unittest
 import urllib.request
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,7 @@ class RelayFixture(unittest.TestCase):
             "minecraft_path": str(self.minecraft),
             "saves_path": str(self.root / "saves"),
             "associations": {"RelayWorld": "26.1-test"},
+            "owner_allowlists": {},
         }
 
     def tearDown(self) -> None:
@@ -72,17 +74,116 @@ class CoreTests(RelayFixture):
     def test_player_mapping_and_replace(self) -> None:
         players = core.list_players(self.config, "RelayWorld", "26.1-test")["players"]
         self.assertEqual([item["name"] for item in players], ["Notch"])
+        self.assertFalse(players[0]["allowed"])
+        self.config["owner_allowlists"] = {
+            "RelayWorld": {
+                str(self.player_uuid): {
+                    "official_name": "Notch",
+                    "cached_name": "Notch",
+                    "verified_at": "2026-11-06T00:00:00+00:00",
+                    "source": "mojang-sessionserver",
+                }
+            }
+        }
         progress = []
         core.replace_owner(
             self.config,
             "RelayWorld",
             "26.1-test",
-            players[0]["uid"],
+            str(self.player_uuid),
             lambda value, message: progress.append((value, message)),
         )
         target = self.version / "saves" / "RelayWorld"
         self.assertTrue((target / "level.dat").is_file())
         self.assertEqual(progress[-1][0], 100)
+
+    def test_replace_rejects_player_outside_allowlist(self) -> None:
+        with self.assertRaisesRegex(core.RelayError, "白名单"):
+            core.replace_owner(
+                self.config,
+                "RelayWorld",
+                "26.1-test",
+                str(self.player_uuid),
+                lambda _value, _message: None,
+            )
+
+    def test_official_profile_verification(self) -> None:
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps(
+                    {"id": self_uuid.hex, "name": "Notch", "properties": []}
+                ).encode("utf-8")
+
+        self_uuid = self.player_uuid
+        result = core.verify_official_profile(
+            str(self.player_uuid), opener=lambda _request, timeout: Response()
+        )
+        self.assertEqual(result["uuid"], str(self.player_uuid))
+        self.assertEqual(result["name"], "Notch")
+
+    def test_config_store_persists_owner_allowlist(self) -> None:
+        store = core.ConfigStore(self.root / "config.json")
+        store.save(self.config)
+        store.add_allowed_owner(
+            "RelayWorld",
+            str(self.player_uuid),
+            "Notch",
+            "Notch",
+            "2026-11-06T00:00:00+00:00",
+        )
+        loaded = store.load()
+        self.assertIn(str(self.player_uuid), loaded["owner_allowlists"]["RelayWorld"])
+        store.remove_allowed_owner("RelayWorld", str(self.player_uuid))
+        self.assertNotIn("RelayWorld", store.load()["owner_allowlists"])
+        store.add_allowed_owner(
+            "RelayWorld",
+            str(self.player_uuid),
+            "Notch",
+            "Notch",
+            "2026-11-06T00:00:00+00:00",
+        )
+        other_saves = self.root / "other-saves"
+        other_saves.mkdir()
+        store.update_settings(str(self.minecraft), str(other_saves))
+        self.assertEqual(store.load()["owner_allowlists"], {})
+
+    def test_same_name_uuids_remain_distinct(self) -> None:
+        offline_uuid = uuid.UUID("5627dd98-e6be-3c21-b8a8-e92344183641")
+        (self.save / "players" / "data" / f"{offline_uuid}.dat").write_bytes(b"player")
+        (self.version / "usercache.json").write_text(
+            json.dumps(
+                [
+                    {"name": "Notch", "uuid": str(self.player_uuid)},
+                    {"name": "Notch", "uuid": str(offline_uuid)},
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.config["owner_allowlists"] = {
+            "RelayWorld": {
+                str(self.player_uuid): {
+                    "official_name": "Notch",
+                    "cached_name": "Notch",
+                    "verified_at": "2026-11-06T00:00:00+00:00",
+                    "source": "mojang-sessionserver",
+                }
+            }
+        }
+        result = core.list_players(self.config, "RelayWorld", "26.1-test")
+        self.assertEqual(len(result["players"]), 2)
+        self.assertTrue(all(item["nameConflict"] for item in result["players"]))
+        self.assertEqual(
+            [item["uuid"] for item in result["eligiblePlayers"]],
+            [str(self.player_uuid)],
+        )
 
     def test_import_overwrite_and_delete(self) -> None:
         incoming = self.root / "incoming" / "AddedWorld"
@@ -132,6 +233,15 @@ class HttpApiTests(RelayFixture):
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def wait_job(self, job_id: str) -> dict:
+        job = {}
+        for _ in range(100):
+            _, job = self.request(f"/api/jobs/{job_id}")
+            if job["status"] != "running":
+                return job
+            time.sleep(0.05)
+        self.fail(f"任务超时：{job_id}")
+
     def test_settings_players_and_replace_job(self) -> None:
         status, configured = self.request(
             "/api/settings",
@@ -146,21 +256,109 @@ class HttpApiTests(RelayFixture):
             {"save": "RelayWorld", "version": "26.1-test"},
         )
         _, players = self.request("/api/players?save=RelayWorld&version=26.1-test")
-        uid = players["players"][0]["uid"]
+        self.assertEqual(players["eligiblePlayers"], [])
+        with patch.object(
+            core,
+            "verify_official_profile",
+            return_value={
+                "uuid": str(self.player_uuid),
+                "name": "Notch",
+                "verifiedAt": "2026-11-06T00:00:00+00:00",
+            },
+        ):
+            status, allowlisted = self.request(
+                "/api/owner-allowlist/verify-add",
+                "POST",
+                {
+                    "save": "RelayWorld",
+                    "version": "26.1-test",
+                    "uuid": str(self.player_uuid),
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(allowlisted["profile"]["uuid"], str(self.player_uuid))
+        _, players = self.request("/api/players?save=RelayWorld&version=26.1-test")
+        self.assertEqual(
+            [item["uuid"] for item in players["eligiblePlayers"]],
+            [str(self.player_uuid)],
+        )
         status, started = self.request(
             "/api/jobs/replace",
             "POST",
-            {"save": "RelayWorld", "version": "26.1-test", "uid": uid},
+            {
+                "save": "RelayWorld",
+                "version": "26.1-test",
+                "uuid": str(self.player_uuid),
+            },
         )
         self.assertEqual(status, 202)
-        job = {}
-        for _ in range(100):
-            _, job = self.request(f"/api/jobs/{started['jobId']}")
-            if job["status"] != "running":
-                break
-            time.sleep(0.05)
+        job = self.wait_job(started["jobId"])
         self.assertEqual(job["status"], "success", job)
         self.assertTrue((self.version / "saves" / "RelayWorld" / "level.dat").is_file())
+
+        status, removed = self.request(
+            "/api/owner-allowlist/remove",
+            "POST",
+            {
+                "save": "RelayWorld",
+                "version": "26.1-test",
+                "uuid": str(self.player_uuid),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(removed["removed"])
+        _, players = self.request("/api/players?save=RelayWorld&version=26.1-test")
+        self.assertEqual(players["eligiblePlayers"], [])
+
+    def test_import_overwrite_and_delete_clear_owner_metadata(self) -> None:
+        self.request(
+            "/api/settings",
+            "POST",
+            {"minecraftPath": str(self.minecraft), "savesPath": str(self.root / "saves")},
+        )
+        self.request(
+            "/api/association",
+            "POST",
+            {"save": "RelayWorld", "version": "26.1-test"},
+        )
+        app.STORE.add_allowed_owner(
+            "RelayWorld",
+            str(self.player_uuid),
+            "Notch",
+            "Notch",
+            "2026-11-06T00:00:00+00:00",
+        )
+
+        incoming = self.root / "incoming" / "RelayWorld"
+        incoming.mkdir(parents=True)
+        (incoming / "level.dat").write_bytes(minimal_level_dat())
+        status, started = self.request(
+            "/api/jobs/import",
+            "POST",
+            {"sourcePath": str(incoming), "overwrite": True},
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(self.wait_job(started["jobId"])["status"], "success")
+        self.assertNotIn("RelayWorld", app.STORE.load()["owner_allowlists"])
+
+        app.STORE.add_allowed_owner(
+            "RelayWorld",
+            str(self.player_uuid),
+            "Notch",
+            "Notch",
+            "2026-11-06T00:00:00+00:00",
+        )
+        status, started = self.request(
+            "/api/jobs/delete",
+            "POST",
+            {"save": "RelayWorld"},
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(self.wait_job(started["jobId"])["status"], "success")
+        config = app.STORE.load()
+        self.assertNotIn("RelayWorld", config["associations"])
+        self.assertNotIn("RelayWorld", config["owner_allowlists"])
+        self.assertFalse(self.save.exists())
 
 
 if __name__ == "__main__":

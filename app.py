@@ -271,6 +271,30 @@ class RequestHandler(BaseHTTPRequestHandler):
                 STORE.set_association(str(body.get("save", "")), str(body.get("version", "")))
                 self._json(bootstrap_state())
                 return
+            if path == "/api/owner-allowlist/verify-add":
+                save_name = str(body.get("save", ""))
+                version_name = str(body.get("version", ""))
+                player_uuid = str(body.get("uuid", ""))
+                config = STORE.load()
+                candidate = core.get_player_candidate(
+                    config, save_name, version_name, player_uuid
+                )
+                profile = core.verify_official_profile(player_uuid)
+                STORE.add_allowed_owner(
+                    save_name,
+                    profile["uuid"],
+                    profile["name"],
+                    str(candidate.get("cachedName", "")),
+                    profile["verifiedAt"],
+                )
+                self._json({"profile": profile})
+                return
+            if path == "/api/owner-allowlist/remove":
+                save_name = str(body.get("save", ""))
+                player_uuid = str(body.get("uuid", ""))
+                STORE.remove_allowed_owner(save_name, player_uuid)
+                self._json({"removed": True})
+                return
             if path == "/api/import/check":
                 self._json(core.import_conflict(STORE.load(), str(body.get("sourcePath", ""))))
                 return
@@ -278,12 +302,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 config = STORE.load()
                 save_name = str(body.get("save", ""))
                 version_name = str(body.get("version", ""))
-                uid_text = str(body.get("uid", ""))
+                player_uuid = str(body.get("uuid", ""))
                 job = JOBS.start(
                     "replace",
                     "修改服主并覆盖存档",
                     lambda item: core.replace_owner(
-                        config, save_name, version_name, uid_text, item.update
+                        config, save_name, version_name, player_uuid, item.update
                     ),
                 )
                 self._json({"jobId": job.id}, HTTPStatus.ACCEPTED)
@@ -297,6 +321,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     save_name, warning = core.import_save(
                         config, source_path, overwrite, item.update
                     )
+                    STORE.clear_owner_allowlist(save_name)
                     item.message = f"存档“{save_name}”已添加"
                     return warning
 
@@ -309,13 +334,17 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 def delete_task(item: Job) -> Optional[str]:
                     core.delete_save(config, save_name, item.update)
-                    STORE.remove_association(save_name)
+                    STORE.remove_save_metadata(save_name)
                     return None
 
                 job = JOBS.start("delete", "删除存档", delete_task)
                 self._json({"jobId": job.id}, HTTPStatus.ACCEPTED)
                 return
             self._error(HTTPStatus.NOT_FOUND, "接口不存在。")
+        except core.ProfileNotFoundError as exc:
+            self._error(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
+        except core.ProfileServiceError as exc:
+            self._error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
         except core.RelayError as exc:
             self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except OSError as exc:

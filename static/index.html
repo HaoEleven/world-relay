@@ -89,7 +89,7 @@
               <span class="step-index" aria-hidden="true">3</span>
               <div class="field-copy">
                 <label for="home-player">新服主</label>
-                <p id="home-player-help">只显示 DAT 文件与 usercache 均可识别的玩家。</p>
+                <p id="home-player-help">只显示已通过正版验证并加入此存档白名单的 UUID。</p>
               </div>
               <select id="home-player" name="player" aria-describedby="home-player-help home-player-note" autocomplete="off" required disabled>
                 <option value="">请先选择存档</option>
@@ -114,7 +114,7 @@
           <header class="page-header manage-header">
             <div>
               <h1 id="manage-title" tabindex="-1">存档管理</h1>
-              <p class="page-intro">配置两个独立目录，查看版本，为存档绑定 usercache，并管理联机存档。</p>
+              <p class="page-intro">配置目录、关联版本，并为每个联机存档管理独立的可选服主白名单。</p>
             </div>
             <button id="add-save" class="secondary-button" type="button" disabled>
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -172,7 +172,7 @@
               <div class="empty-state">
                 <svg aria-hidden="true" viewBox="0 0 48 48"><path d="M7 10h13l4 5h17v24H7zM7 18h34"/></svg>
                 <h2>选择一个项目</h2>
-                <p>版本会显示只读路径；存档可以绑定版本并查看玩家。</p>
+                <p>版本会显示只读路径；存档可以绑定版本并管理可选服主。</p>
               </div>
             </section>
           </div>

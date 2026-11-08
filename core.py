@@ -9,18 +9,23 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import socket
 import shutil
 import struct
 import tempfile
 import threading
 import uuid
 import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 ProgressCallback = Callable[[int, str], None]
 TARGET_NBT_PATH = (b"Data", b"singleplayer_uuid")
+PROFILE_LOOKUP_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 
 
 class RelayError(Exception):
@@ -29,6 +34,52 @@ class RelayError(Exception):
 
 class NBTFormatError(RelayError):
     """NBT 文件格式错误。"""
+
+
+class ProfileNotFoundError(RelayError):
+    """UUID 不属于可由正版档案服务确认的玩家。"""
+
+
+class ProfileServiceError(RelayError):
+    """正版档案服务暂时无法访问或返回无效响应。"""
+
+
+def _empty_config() -> Dict[str, Any]:
+    return {
+        "minecraft_path": "",
+        "saves_path": "",
+        "associations": {},
+        "owner_allowlists": {},
+    }
+
+
+def _normalize_owner_allowlists(value: Any) -> Dict[str, Dict[str, Dict[str, str]]]:
+    result: Dict[str, Dict[str, Dict[str, str]]] = {}
+    if not isinstance(value, dict):
+        return result
+    for save_name, entries in value.items():
+        if not isinstance(save_name, str) or not isinstance(entries, dict):
+            continue
+        normalized_entries: Dict[str, Dict[str, str]] = {}
+        for uuid_text, record in entries.items():
+            if not isinstance(uuid_text, str) or not isinstance(record, dict):
+                continue
+            try:
+                normalized_uuid = str(uuid.UUID(uuid_text))
+            except ValueError:
+                continue
+            official_name = record.get("official_name")
+            if not isinstance(official_name, str) or not official_name.strip():
+                continue
+            normalized_entries[normalized_uuid] = {
+                "official_name": official_name.strip(),
+                "cached_name": str(record.get("cached_name", "")).strip(),
+                "verified_at": str(record.get("verified_at", "")).strip(),
+                "source": str(record.get("source", "mojang-sessionserver")).strip(),
+            }
+        if normalized_entries:
+            result[save_name] = normalized_entries
+    return result
 
 
 class ConfigStore:
@@ -41,7 +92,7 @@ class ConfigStore:
     def load(self) -> Dict[str, Any]:
         with self._lock:
             if not self.path.exists():
-                return {"minecraft_path": "", "saves_path": "", "associations": {}}
+                return _empty_config()
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
@@ -52,6 +103,9 @@ class ConfigStore:
                 "minecraft_path": str(data.get("minecraft_path", "")),
                 "saves_path": str(data.get("saves_path", "")),
                 "associations": dict(data.get("associations", {})),
+                "owner_allowlists": _normalize_owner_allowlists(
+                    data.get("owner_allowlists", {})
+                ),
             }
 
     def save(self, data: Dict[str, Any]) -> None:
@@ -67,8 +121,12 @@ class ConfigStore:
             raise RelayError("选择的 .minecraft 目录中没有 versions 文件夹。")
         with self._lock:
             data = self.load()
+            previous_saves = str(data.get("saves_path", ""))
             data["minecraft_path"] = str(minecraft)
             data["saves_path"] = str(saves)
+            if previous_saves and os.path.normcase(previous_saves) != os.path.normcase(str(saves)):
+                # 白名单属于具体的存档根目录，切换根目录时不沿用旧身份授权。
+                data["owner_allowlists"] = {}
             self.save(data)
             return data
 
@@ -86,6 +144,70 @@ class ConfigStore:
             data = self.load()
             if save_name in data["associations"]:
                 del data["associations"][save_name]
+                self.save(data)
+
+    def add_allowed_owner(
+        self,
+        save_name: str,
+        player_uuid: str,
+        official_name: str,
+        cached_name: str,
+        verified_at: str,
+    ) -> Dict[str, Any]:
+        _validate_name(save_name, "存档名称")
+        try:
+            normalized_uuid = str(uuid.UUID(player_uuid))
+        except ValueError as exc:
+            raise RelayError(f"无效的玩家 UUID：{player_uuid}") from exc
+        if not official_name.strip():
+            raise RelayError("正版档案没有返回有效的玩家名称。")
+        with self._lock:
+            data = self.load()
+            entries = data["owner_allowlists"].setdefault(save_name, {})
+            entries[normalized_uuid] = {
+                "official_name": official_name.strip(),
+                "cached_name": cached_name.strip(),
+                "verified_at": verified_at.strip(),
+                "source": "mojang-sessionserver",
+            }
+            self.save(data)
+            return data
+
+    def remove_allowed_owner(self, save_name: str, player_uuid: str) -> Dict[str, Any]:
+        _validate_name(save_name, "存档名称")
+        try:
+            normalized_uuid = str(uuid.UUID(player_uuid))
+        except ValueError as exc:
+            raise RelayError(f"无效的玩家 UUID：{player_uuid}") from exc
+        with self._lock:
+            data = self.load()
+            entries = data["owner_allowlists"].get(save_name, {})
+            entries.pop(normalized_uuid, None)
+            if not entries:
+                data["owner_allowlists"].pop(save_name, None)
+            self.save(data)
+            return data
+
+    def clear_owner_allowlist(self, save_name: str) -> None:
+        _validate_name(save_name, "存档名称")
+        with self._lock:
+            data = self.load()
+            if save_name in data["owner_allowlists"]:
+                del data["owner_allowlists"][save_name]
+                self.save(data)
+
+    def remove_save_metadata(self, save_name: str) -> None:
+        _validate_name(save_name, "存档名称")
+        with self._lock:
+            data = self.load()
+            changed = False
+            if save_name in data["associations"]:
+                del data["associations"][save_name]
+                changed = True
+            if save_name in data["owner_allowlists"]:
+                del data["owner_allowlists"][save_name]
+                changed = True
+            if changed:
                 self.save(data)
 
 
@@ -133,6 +255,7 @@ def discover_versions(config: Dict[str, Any]) -> List[Dict[str, str]]:
 def discover_saves(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     saves_root = _root_from_config(config, "saves_path", "saves 路径")
     associations = config.get("associations", {})
+    allowlists = config.get("owner_allowlists", {})
     result = []
     for entry in sorted(saves_root.iterdir(), key=lambda item: item.name.casefold()):
         if (
@@ -146,6 +269,7 @@ def discover_saves(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "path": str(entry.resolve()),
                     "version": associations.get(entry.name, ""),
                     "hasLevelDat": (entry / "level.dat").is_file(),
+                    "ownerCount": len(allowlists.get(entry.name, {})),
                 }
             )
     return result
@@ -242,37 +366,136 @@ def list_players(config: Dict[str, Any], save_name: str, version_name: str) -> D
     if not player_dir.is_dir():
         return {
             "players": [],
+            "eligiblePlayers": [],
             "cachePath": "",
             "message": "该存档中没有找到 players/data 或 playerdata 目录。",
         }
 
     cache, cache_path = _load_usercache(config, version_name)
-    players: List[Dict[str, str]] = []
+    allowlist = config.get("owner_allowlists", {}).get(save_name, {})
+    raw_players: List[Dict[str, Any]] = []
     for dat_file in sorted(player_dir.glob("*.dat"), key=lambda item: item.name.casefold()):
         try:
-            normalized_uuid = str(uuid.UUID(dat_file.stem))
+            player_uuid = uuid.UUID(dat_file.stem)
         except ValueError:
             continue
-        name = cache.get(normalized_uuid)
-        if not name:
-            continue
+        normalized_uuid = str(player_uuid)
+        cached_name = cache.get(normalized_uuid, "")
+        allowed_record = allowlist.get(normalized_uuid, {})
+        official_name = str(allowed_record.get("official_name", ""))
+        display_name = official_name or cached_name or "未知玩家"
         uid_text = format_uid(uuid_to_uid(normalized_uuid))
-        players.append(
+        raw_players.append(
             {
-                "name": name,
+                "name": display_name,
+                "cachedName": cached_name,
+                "officialName": official_name,
                 "uuid": normalized_uuid,
                 "uid": uid_text,
-                "label": f"{name}：{uid_text}",
+                "label": f"{display_name}：{uid_text}",
+                "allowed": bool(allowed_record),
+                "verifiedAt": str(allowed_record.get("verified_at", "")),
+                "uuidVersion": player_uuid.version,
             }
         )
 
-    if not cache_path:
-        message = "没有找到可用的 usercache.json，因此未显示玩家。"
-    elif not players:
-        message = "DAT 文件中的玩家均未出现在当前版本的 usercache.json 中。"
+    name_counts: Dict[str, int] = {}
+    for player in raw_players:
+        known_name = player["cachedName"] or player["officialName"]
+        if known_name:
+            key = known_name.casefold()
+            name_counts[key] = name_counts.get(key, 0) + 1
+    for player in raw_players:
+        known_name = player["cachedName"] or player["officialName"]
+        player["nameConflict"] = bool(
+            known_name and name_counts.get(known_name.casefold(), 0) > 1
+        )
+
+    eligible_players = [player for player in raw_players if player["allowed"]]
+    if not raw_players:
+        message = "该存档中没有可识别的玩家 DAT 文件。"
+    elif not eligible_players:
+        message = "该存档还没有可选服主，请先在存档管理中验证并加入白名单。"
+    elif not cache_path:
+        message = "未找到 usercache.json；白名单玩家仍使用已验证的正版名称显示。"
     else:
         message = ""
-    return {"players": players, "cachePath": cache_path, "message": message}
+    return {
+        "players": raw_players,
+        "eligiblePlayers": eligible_players,
+        "cachePath": cache_path,
+        "message": message,
+    }
+
+
+def get_player_candidate(
+    config: Dict[str, Any], save_name: str, version_name: str, player_uuid_text: str
+) -> Dict[str, Any]:
+    try:
+        normalized_uuid = str(uuid.UUID(player_uuid_text))
+    except ValueError as exc:
+        raise RelayError(f"无效的玩家 UUID：{player_uuid_text}") from exc
+    players = list_players(config, save_name, version_name)["players"]
+    for player in players:
+        if player["uuid"] == normalized_uuid:
+            return player
+    raise RelayError("该 UUID 没有对应的玩家 DAT 文件，不能加入服主白名单。")
+
+
+def verify_official_profile(
+    player_uuid_text: str,
+    opener: Callable[..., Any] = urlopen,
+    timeout: float = 8.0,
+) -> Dict[str, str]:
+    """通过 Mojang 会话档案服务确认 UUID，并返回当前正版名称。"""
+    try:
+        player_uuid = uuid.UUID(player_uuid_text)
+    except ValueError as exc:
+        raise RelayError(f"无效的玩家 UUID：{player_uuid_text}") from exc
+    request = Request(
+        PROFILE_LOOKUP_URL.format(uuid=player_uuid.hex) + "?unsigned=true",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "WorldRelay/owner-verification",
+        },
+        method="GET",
+    )
+    try:
+        with opener(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200))
+            if status in {204, 400, 404}:
+                raise ProfileNotFoundError("该 UUID 未在正版档案服务中找到，不能加入白名单。")
+            if status != 200:
+                raise ProfileServiceError(f"正版档案服务返回了异常状态（{status}），请稍后重试。")
+            raw = response.read(1_000_001)
+    except HTTPError as exc:
+        if exc.code in {204, 400, 404}:
+            raise ProfileNotFoundError(
+                "该 UUID 未在正版档案服务中找到，可能是离线 UUID。"
+            ) from exc
+        raise ProfileServiceError(
+            f"正版档案服务暂时不可用（HTTP {exc.code}），请稍后重试。"
+        ) from exc
+    except (URLError, socket.timeout, TimeoutError, OSError) as exc:
+        raise ProfileServiceError("无法连接正版档案服务，请检查网络后重试。") from exc
+
+    if len(raw) > 1_000_000:
+        raise ProfileServiceError("正版档案服务返回的数据过大，已停止验证。")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+        returned_uuid = str(uuid.UUID(str(payload["id"])))
+        official_name = str(payload["name"]).strip()
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise ProfileServiceError("正版档案服务返回了无法识别的数据，请稍后重试。") from exc
+    if returned_uuid != str(player_uuid):
+        raise ProfileServiceError("正版档案服务返回的 UUID 与请求不一致，已拒绝加入白名单。")
+    if not official_name:
+        raise ProfileServiceError("正版档案服务没有返回玩家名称。")
+    return {
+        "uuid": returned_uuid,
+        "name": official_name,
+        "verifiedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 class _NBTScanner:
@@ -477,19 +700,26 @@ def replace_owner(
     config: Dict[str, Any],
     save_name: str,
     version_name: str,
-    uid_text: str,
+    player_uuid_text: str,
     progress: ProgressCallback,
 ) -> Optional[str]:
-    progress(5, "正在检查路径和玩家 UID")
+    progress(5, "正在检查路径和服主白名单")
     source = _source_save(config, save_name)
     version = _version_directory(config, version_name)
     level_dat = source / "level.dat"
     if not level_dat.is_file():
         raise RelayError(f"存档中没有 level.dat：{level_dat}")
-    uid = parse_uid(uid_text)
-    available = {item["uid"] for item in list_players(config, save_name, version_name)["players"]}
-    if uid_text not in available:
-        raise RelayError("所选 UID 不属于当前存档中可识别的玩家。")
+    try:
+        normalized_uuid = str(uuid.UUID(player_uuid_text))
+    except ValueError as exc:
+        raise RelayError(f"无效的玩家 UUID：{player_uuid_text}") from exc
+    eligible = {
+        item["uuid"]
+        for item in list_players(config, save_name, version_name)["eligiblePlayers"]
+    }
+    if normalized_uuid not in eligible:
+        raise RelayError("所选玩家不在该存档的服主白名单中。")
+    uid = uuid_to_uid(normalized_uuid)
 
     progress(25, "正在备份并修改 singleplayer_uuid")
     original = update_level_dat(level_dat, uid)

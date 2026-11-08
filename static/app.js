@@ -71,6 +71,9 @@ async function refreshBootstrap({ preserveDetail = true } = {}) {
   state.bootstrap = data;
   renderStatus();
   renderHomeSelectors();
+  if (byId("home-version").value && byId("home-save").value) {
+    await loadHomePlayers();
+  }
   renderSettings();
   renderInventory(preserveDetail);
 }
@@ -124,9 +127,10 @@ async function loadHomePlayers() {
   select.disabled = true;
   try {
     const result = await api(`/api/players?save=${encodeURIComponent(save)}&version=${encodeURIComponent(version)}`);
-    setOptions(select, result.players, "请选择新服主", "uid", "label");
-    select.disabled = result.players.length === 0;
-    byId("home-player-note").textContent = result.message || `已识别 ${result.players.length} 名玩家。`;
+    setOptions(select, result.eligiblePlayers, "请选择新服主", "uuid", "label");
+    select.disabled = result.eligiblePlayers.length === 0;
+    byId("home-player-note").textContent = result.message
+      || `白名单中有 ${result.eligiblePlayers.length} 名可选服主。`;
   } catch (error) {
     resetPlayerSelect("玩家读取失败");
     byId("home-player-note").textContent = error.message;
@@ -137,8 +141,8 @@ async function loadHomePlayers() {
 function updateHomeReady() {
   const version = byId("home-version").value;
   const save = byId("home-save").value;
-  const uid = byId("home-player").value;
-  byId("start-replace").disabled = !(version && save && uid);
+  const playerUuid = byId("home-player").value;
+  byId("start-replace").disabled = !(version && save && playerUuid);
   const base = state.bootstrap?.settings.minecraftPath || ".minecraft";
   byId("target-preview").textContent = version && save
     ? `${base}\\versions\\${version}\\saves\\${save}`
@@ -205,7 +209,7 @@ function renderInventory(preserveDetail = true) {
     const subtitle = document.createElement("small");
     subtitle.textContent = state.inventory === "versions"
       ? "只读版本目录"
-      : item.version || "尚未绑定版本";
+      : `${item.version || "尚未绑定版本"} · ${item.ownerCount || 0} 位可选服主`;
     copy.append(title, subtitle);
     const arrow = document.createElement("span");
     arrow.className = "item-arrow";
@@ -317,10 +321,13 @@ function renderSaveDetail(item) {
   const playersBlock = document.createElement("div");
   playersBlock.className = "detail-block";
   const playersTitle = document.createElement("h3");
-  playersTitle.textContent = "玩家信息";
+  playersTitle.textContent = "可选服主管理";
+  const playersHelp = document.createElement("p");
+  playersHelp.className = "detail-help";
+  playersHelp.textContent = "只有通过正版档案验证并加入此存档白名单的 UUID，才会出现在主页。";
   const playersBody = document.createElement("div");
   playersBody.className = "player-results";
-  playersBlock.append(playersTitle, playersBody);
+  playersBlock.append(playersTitle, playersHelp, playersBody);
   panel.append(playersBlock);
   if (item.version) loadDetailPlayers(item.name, item.version, playersBody);
   else playersBody.textContent = "先为存档选择对应版本。";
@@ -351,14 +358,64 @@ async function loadDetailPlayers(save, version, container) {
     list.className = "player-list";
     for (const player of result.players) {
       const row = document.createElement("li");
-      row.className = "player-row";
-      const name = document.createElement("span");
+      row.className = `player-row${player.allowed ? " is-allowed" : ""}`;
+
+      const identity = document.createElement("div");
+      identity.className = "player-identity";
+      const heading = document.createElement("div");
+      heading.className = "player-identity-heading";
+      const name = document.createElement("strong");
       name.className = "player-name";
       name.textContent = player.name;
-      const uid = document.createElement("span");
-      uid.className = "player-uid";
-      uid.textContent = player.uid;
-      row.append(name, uid);
+      heading.append(name);
+
+      const verifiedBadge = document.createElement("span");
+      verifiedBadge.className = `identity-badge ${player.allowed ? "is-verified" : "is-pending"}`;
+      verifiedBadge.textContent = player.allowed ? "正版已验证" : "待验证";
+      heading.append(verifiedBadge);
+      if (player.nameConflict) {
+        const conflictBadge = document.createElement("span");
+        conflictBadge.className = "identity-badge is-conflict";
+        conflictBadge.textContent = "同名 UUID";
+        heading.append(conflictBadge);
+      }
+
+      const uuidLine = document.createElement("code");
+      uuidLine.className = "player-uuid";
+      uuidLine.textContent = player.uuid;
+      const meta = document.createElement("p");
+      meta.className = "player-meta";
+      const metaParts = [`UID：${player.uid}`];
+      if (player.allowed && player.cachedName && player.cachedName !== player.officialName) {
+        metaParts.push(`缓存名称：${player.cachedName}`);
+      } else if (!player.cachedName) {
+        metaParts.push("usercache 中没有名称");
+      }
+      meta.textContent = metaParts.join(" · ");
+      identity.append(heading, uuidLine, meta);
+
+      const action = document.createElement("div");
+      action.className = "player-action";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = player.allowed ? "quiet-button owner-action" : "secondary-button owner-action";
+      button.textContent = player.allowed ? "移出白名单" : "验证并加入";
+      button.setAttribute(
+        "aria-label",
+        `${button.textContent}：${player.name}，UUID ${player.uuid}`,
+      );
+      const feedback = document.createElement("p");
+      feedback.className = "player-action-feedback";
+      feedback.setAttribute("role", "status");
+      button.addEventListener("click", () => updateOwnerAllowlist({
+        save,
+        version,
+        player,
+        button,
+        feedback,
+      }));
+      action.append(button, feedback);
+      row.append(identity, action);
       list.append(row);
     }
     container.append(list);
@@ -370,6 +427,38 @@ async function loadDetailPlayers(save, version, container) {
     }
   } catch (error) {
     container.textContent = error.message;
+  }
+}
+
+async function updateOwnerAllowlist({ save, version, player, button, feedback }) {
+  const adding = !player.allowed;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = adding ? "正在验证…" : "正在移出…";
+  feedback.textContent = adding ? "正在连接正版档案服务。" : "正在更新此存档的白名单。";
+  feedback.setAttribute("role", "status");
+  try {
+    await api(
+      adding ? "/api/owner-allowlist/verify-add" : "/api/owner-allowlist/remove",
+      {
+        method: "POST",
+        body: { save, version, uuid: player.uuid },
+      },
+    );
+    state.bootstrap = await api("/api/bootstrap");
+    state.selectedItem = save;
+    renderStatus();
+    renderHomeSelectors();
+    if (byId("home-version").value && byId("home-save").value === save) {
+      await loadHomePlayers();
+    }
+    renderInventory(true);
+  } catch (error) {
+    feedback.textContent = error.message;
+    feedback.setAttribute("role", "alert");
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = adding ? "验证并加入" : "移出白名单";
   }
 }
 
@@ -573,7 +662,7 @@ function bindEvents() {
     await startJob("/api/jobs/replace", {
       version: byId("home-version").value,
       save: byId("home-save").value,
-      uid: byId("home-player").value,
+      uuid: byId("home-player").value,
     });
   });
 

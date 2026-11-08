@@ -45,6 +45,7 @@ jobs:
           $version = python -c "import app_info; print(app_info.VERSION)"
           $folder = "WorldRelay-v$version"
           Copy-Item -LiteralPath "README.md" -Destination "dist/$folder/README.md"
+          Copy-Item -LiteralPath "LICENSE" -Destination "dist/$folder/LICENSE"
           Compress-Archive -Path "dist/$folder" -DestinationPath "$folder-windows-x64.zip"
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$folder-windows-x64.zip").Hash.ToLowerInvariant()
           "$hash  $folder-windows-x64.zip" | Set-Content -Encoding ascii "$folder-windows-x64.zip.sha256"

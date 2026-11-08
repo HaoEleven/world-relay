@@ -833,6 +833,13 @@ input:disabled {
   max-width: 430px;
 }
 
+.detail-help {
+  max-width: 680px;
+  margin: -2px 0 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .association-row {
   display: flex;
   align-items: center;
@@ -853,19 +860,95 @@ input:disabled {
 
 .player-row {
   display: grid;
-  grid-template-columns: minmax(90px, 0.45fr) minmax(0, 1fr);
-  gap: 14px;
-  padding: 12px 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 16px;
   background: #efe8d7;
-  border-left: 4px solid var(--copper-dark);
+  border-left: 4px solid #9b9f94;
+}
+
+.player-row.is-allowed {
+  background: #e5eee8;
+  border-left-color: var(--copper-dark);
+}
+
+.player-identity {
+  min-width: 0;
+}
+
+.player-identity-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 .player-name {
   font-weight: 700;
 }
 
-.player-uid {
+.identity-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 0.71rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.identity-badge.is-verified {
+  color: #2c5745;
+  background: #cfe3d9;
+  border: 1px solid #9fc4b3;
+}
+
+.identity-badge.is-pending {
+  color: #555f59;
+  background: #e2ded2;
+  border: 1px solid #c6c0b1;
+}
+
+.identity-badge.is-conflict {
+  color: #6b4a1e;
+  background: #f2e4c8;
+  border: 1px solid #d5b77e;
+}
+
+.player-uuid {
+  display: block;
+  margin-top: 6px;
+  color: #33443c;
+  font-family: var(--font-mono);
+  font-size: 0.79rem;
+  overflow-wrap: anywhere;
+}
+
+.player-meta,
+.player-action-feedback {
+  margin: 4px 0 0;
   color: #4c5852;
+  font-size: 0.77rem;
+}
+
+.player-action {
+  display: grid;
+  width: 146px;
+  justify-items: stretch;
+}
+
+.owner-action {
+  width: 100%;
+  min-height: 46px;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
+
+.player-action-feedback {
+  color: var(--redstone-dark);
+  line-height: 1.35;
 }
 
 .cache-path {
@@ -1245,7 +1328,11 @@ button:active:not(:disabled) {
 
   .player-row {
     grid-template-columns: 1fr;
-    gap: 3px;
+    gap: 12px;
+  }
+
+  .player-action {
+    width: 100%;
   }
 
   .modal-body,

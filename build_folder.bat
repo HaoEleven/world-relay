@@ -50,6 +50,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+copy /Y "LICENSE" "%DIST_DIR%\LICENSE" >nul
+if errorlevel 1 (
+    echo.
+    echo [失败] EXE 已生成，但 LICENSE 无法复制到发布目录。
+    pause
+    exit /b 1
+)
+
 echo.
 echo [完成] 发布目录：%~dp0%DIST_DIR%
 echo 双击其中的 WorldRelay.exe 即可启动。
